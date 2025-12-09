@@ -2,8 +2,10 @@ package outsideapi
 
 import (
 	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
-	"math/rand"
 	"net/http"
 	"os"
 	"time"
@@ -13,7 +15,8 @@ import (
 )
 
 type FacebookLoginResponse struct {
-	URL string `json:"url"`
+	URL   string `json:"url"`
+	State string `json:"state"`
 }
 
 type FacebookCallbackRequest struct {
@@ -27,48 +30,71 @@ type FacebookCallbackResponse struct {
 	Email       string `json:"email"`
 }
 
-const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
-func generateRandomString(length int) string {
-	seededRand := rand.New(rand.NewSource(time.Now().UnixNano()))
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = charset[seededRand.Intn(len(charset))]
+func generateRandomState(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
 	}
-	return string(b)
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-var oauthStateString = generateRandomString(16)
-
 func facebookLoginHandler(c *gin.Context) {
-	config, ok := c.Get("facebook")
+	v, ok := c.Get("facebook")
 	if !ok {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "facebook config not found"})
 		return
 	}
-	fbConfig := config.(*oauth2.Config)
-	url := fbConfig.AuthCodeURL(oauthStateString)
-	c.JSON(http.StatusOK, FacebookLoginResponse{URL: url})
+	fbConfig, ok := v.(*oauth2.Config)
+	if !ok || fbConfig == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid facebook config"})
+		return
+	}
+	state, err := generateRandomState(18)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate state"})
+		return
+	}
+	url := fbConfig.AuthCodeURL(state)
+	// Note: for a secure implementation, store `state` per-user (session or DB) and validate it on callback.
+	c.JSON(http.StatusOK, FacebookLoginResponse{URL: url, State: state})
 }
 
 func facebookCallbackHandler(c *gin.Context) {
-	var params FacebookCallbackRequest
-	if err := c.ShouldBind(&params); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	// Support both query parameters (typical OAuth redirect) and JSON POST bodies.
+	code := c.Query("code")
+	state := c.Query("state")
+	if code == "" {
+		var params FacebookCallbackRequest
+		if err := c.BindJSON(&params); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		code = params.Code
+		state = params.State
+	}
+	if code == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "code is required"})
 		return
 	}
-	config, ok := c.Get("facebook")
+
+	v, ok := c.Get("facebook")
 	if !ok {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "facebook config not found"})
 		return
 	}
-	fbConfig := config.(*oauth2.Config)
-	token, err := fbConfig.Exchange(c, params.Code)
+	fbConfig, ok := v.(*oauth2.Config)
+	if !ok || fbConfig == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid facebook config"})
+		return
+	}
+
+	// Note: validate `state` against stored value for CSRF protection.
+	token, err := fbConfig.Exchange(c.Request.Context(), code)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to exchange token: " + err.Error()})
 		return
 	}
-	client := fbConfig.Client(c, token)
+	client := fbConfig.Client(context.Background(), token)
 	resp, err := client.Get("https://graph.facebook.com/me?fields=name,email")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get user info: " + err.Error()})
@@ -89,12 +115,24 @@ func facebookCallbackHandler(c *gin.Context) {
 		Email:       fbUser.Email,
 	}
 	bodyBytes, _ := json.Marshal(&body)
-	http.Post(os.Getenv("FACEBOOK_CALLBACK_URL"), "application/json", bytes.NewBuffer(bodyBytes))
-	c.JSON(http.StatusOK, gin.H{"status": "callback received"})
+	callbackURL := os.Getenv("FACEBOOK_CALLBACK_URL")
+	if callbackURL != "" {
+		go func(b []byte, url string) {
+			client := &http.Client{Timeout: 5 * time.Second}
+			resp, err := client.Post(url, "application/json", bytes.NewBuffer(b))
+			if err != nil {
+				println("facebook callback forward error:", err.Error())
+				return
+			}
+			defer resp.Body.Close()
+		}(bodyBytes, callbackURL)
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "callback received", "state": state})
 }
 
 func FacebookRouter(router *gin.Engine) {
 	api := router.Group("/fb")
 	api.GET("/login", facebookLoginHandler)
+	api.GET("/callback", facebookCallbackHandler)
 	api.POST("/callback", facebookCallbackHandler)
 }

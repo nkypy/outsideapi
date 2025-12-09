@@ -2,10 +2,10 @@ package outsideapi
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/plutov/paypal/v4"
@@ -45,19 +45,27 @@ type PaypalRefundCaptureResponse paypal.RefundResponse
 
 func paypalCreateOrderHandler(c *gin.Context) {
 	var params PaypalCreateOrderRequest
-	if err := c.ShouldBind(&params); err != nil {
+	if err := c.BindJSON(&params); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	client, ok := c.Get("paypal")
+	v, ok := c.Get("paypal")
 	if !ok {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "paypal client not found"})
 		return
 	}
-	pp := client.(*paypal.Client)
-	order, err := pp.CreateOrder(context.TODO(), paypal.OrderIntentCapture, params.PurchaseUnits, params.PaymentSource, params.AppContext)
+	pp, ok := v.(*paypal.Client)
+	if !ok || pp == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid paypal client"})
+		return
+	}
+	order, err := pp.CreateOrder(c.Request.Context(), paypal.OrderIntentCapture, params.PurchaseUnits, params.PaymentSource, params.AppContext)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if order == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "empty order returned"})
 		return
 	}
 	c.JSON(http.StatusOK, PaypalCreateOrderResponse(*order))
@@ -66,19 +74,27 @@ func paypalCreateOrderHandler(c *gin.Context) {
 func paypalCaptureOrderHandler(c *gin.Context) {
 	orderID := c.Param("id")
 	var params PaypalCaptureOrderRequest
-	if err := c.ShouldBind(&params); err != nil {
+	if err := c.BindJSON(&params); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	client, ok := c.Get("paypal")
+	v, ok := c.Get("paypal")
 	if !ok {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "paypal client not found"})
 		return
 	}
-	pp := client.(*paypal.Client)
-	captureResponse, err := pp.CaptureOrder(context.TODO(), orderID, paypal.CaptureOrderRequest(params))
+	pp, ok := v.(*paypal.Client)
+	if !ok || pp == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid paypal client"})
+		return
+	}
+	captureResponse, err := pp.CaptureOrder(c.Request.Context(), orderID, paypal.CaptureOrderRequest(params))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if captureResponse == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "empty capture response"})
 		return
 	}
 	c.JSON(http.StatusOK, PaypalCaptureOrderResponse(*captureResponse))
@@ -86,13 +102,17 @@ func paypalCaptureOrderHandler(c *gin.Context) {
 
 func paypalGetOrderHandler(c *gin.Context) {
 	orderID := c.Param("id")
-	client, ok := c.Get("paypal")
+	v, ok := c.Get("paypal")
 	if !ok {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "paypal client not found"})
 		return
 	}
-	pp := client.(*paypal.Client)
-	order, err := pp.GetOrder(context.TODO(), orderID)
+	pp, ok := v.(*paypal.Client)
+	if !ok || pp == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid paypal client"})
+		return
+	}
+	order, err := pp.GetOrder(c.Request.Context(), orderID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -102,13 +122,17 @@ func paypalGetOrderHandler(c *gin.Context) {
 
 func paypalGetCaptureHandler(c *gin.Context) {
 	captureID := c.Param("id")
-	client, ok := c.Get("paypal")
+	v, ok := c.Get("paypal")
 	if !ok {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "paypal client not found"})
 		return
 	}
-	pp := client.(*paypal.Client)
-	capture, err := pp.CapturedDetail(context.TODO(), captureID)
+	pp, ok := v.(*paypal.Client)
+	if !ok || pp == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid paypal client"})
+		return
+	}
+	capture, err := pp.CapturedDetail(c.Request.Context(), captureID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -119,17 +143,21 @@ func paypalGetCaptureHandler(c *gin.Context) {
 func paypalRefundCaptureHandler(c *gin.Context) {
 	captureID := c.Param("id")
 	var params PaypalRefundCaptureRequest
-	if err := c.ShouldBind(&params); err != nil {
+	if err := c.BindJSON(&params); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	client, ok := c.Get("paypal")
+	v, ok := c.Get("paypal")
 	if !ok {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "paypal client not found"})
 		return
 	}
-	pp := client.(*paypal.Client)
-	refundResponse, err := pp.RefundCapture(context.TODO(), captureID, paypal.RefundCaptureRequest(params))
+	pp, ok := v.(*paypal.Client)
+	if !ok || pp == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid paypal client"})
+		return
+	}
+	refundResponse, err := pp.RefundCapture(c.Request.Context(), captureID, paypal.RefundCaptureRequest(params))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -144,7 +172,23 @@ func paypalCallbackHandler(c *gin.Context) {
 		return
 	}
 	bodyBytes, _ := json.Marshal(&payload)
-	http.Post(os.Getenv("PAYPAL_CALLBACK_URL"), "application/json", bytes.NewBuffer(bodyBytes))
+	callbackURL := os.Getenv("PAYPAL_CALLBACK_URL")
+	if callbackURL == "" {
+		c.JSON(http.StatusOK, gin.H{"status": "callback received, no forward configured"})
+		return
+	}
+	// forward asynchronously with a timeout and log errors
+	go func(b []byte, url string) {
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Post(url, "application/json", bytes.NewBuffer(b))
+		if err != nil {
+			// best-effort: don't block caller; log to stdout
+			// in real apps use structured logging
+			println("paypal callback forward error:", err.Error())
+			return
+		}
+		defer resp.Body.Close()
+	}(bodyBytes, callbackURL)
 	c.JSON(http.StatusOK, gin.H{"status": "callback received"})
 }
 

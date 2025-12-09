@@ -19,9 +19,9 @@ go build ./...
 2. 运行（默认端口 `8080`）：
 
 ```bash
-go run cmd/outsideapi/outsideapi.go
+go run cmd/server/main.go
 # 或者
-PORT=9090 go run cmd/outsideapi/outsideapi.go
+PORT=9090 go run cmd/server/main.go
 ```
 
 **环境变量**
