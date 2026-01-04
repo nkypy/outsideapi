@@ -115,6 +115,7 @@ func facebookCallbackHandler(c *gin.Context) {
 		Email:       fbUser.Email,
 	}
 	bodyBytes, _ := json.Marshal(&body)
+	println("facebook callback received:", string(bodyBytes))
 	callbackURL := os.Getenv("FACEBOOK_CALLBACK_URL")
 	if callbackURL != "" {
 		go func(b []byte, url string) {

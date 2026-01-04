@@ -172,6 +172,7 @@ func paypalCallbackHandler(c *gin.Context) {
 		return
 	}
 	bodyBytes, _ := json.Marshal(&payload)
+	println("paypal callback received:", string(bodyBytes))
 	callbackURL := os.Getenv("PAYPAL_CALLBACK_URL")
 	if callbackURL == "" {
 		c.JSON(http.StatusOK, gin.H{"status": "callback received, no forward configured"})
@@ -179,16 +180,23 @@ func paypalCallbackHandler(c *gin.Context) {
 	}
 	// forward asynchronously with a timeout and log errors
 	go func(b []byte, url string) {
+		success := false
 		client := &http.Client{Timeout: 5 * time.Second}
-		resp, err := client.Post(url, "application/json", bytes.NewBuffer(b))
-		if err != nil {
-			// best-effort: don't block caller; log to stdout
-			// in real apps use structured logging
-			println("paypal callback forward error:", err.Error())
-			return
+		for i := 0; i < 3 && !success; i++ {
+			resp, err := client.Post(url, "application/json", bytes.NewBuffer(b))
+			if err != nil || resp.StatusCode != http.StatusOK {
+				// best-effort: don't block caller; log to stdout
+				// in real apps use structured logging
+				println("paypal callback forward error")
+				resp.Body.Close()
+				time.Sleep(time.Duration(i+1) * 3 * time.Second)
+				continue
+			}
+			resp.Body.Close()
+			success = true
 		}
-		defer resp.Body.Close()
 	}(bodyBytes, callbackURL)
+
 	c.JSON(http.StatusOK, gin.H{"status": "callback received"})
 }
 
