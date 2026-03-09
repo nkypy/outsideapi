@@ -188,7 +188,9 @@ func paypalCallbackHandler(c *gin.Context) {
 				// best-effort: don't block caller; log to stdout
 				// in real apps use structured logging
 				println("paypal callback forward error")
-				resp.Body.Close()
+				if resp != nil {
+				    resp.Body.Close()
+				}
 				time.Sleep(time.Duration(i+1) * 3 * time.Second)
 				continue
 			}
